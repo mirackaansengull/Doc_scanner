@@ -1,0 +1,20 @@
+# Vendored plugin: relax style on upstream OpenCV bindings; keep real issues visible.
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  language:
+    strict-casts: false
+    strict-inference: false
+    strict-raw-types: false
+  errors:
+    constant_identifier_names: ignore
+    no_leading_underscores_for_local_identifiers: ignore
+    unnecessary_const: ignore
+    unnecessary_import: ignore
+    unnecessary_string_interpolations: ignore
+  exclude:
+    - example/**
+
+linter:
+  rules:
+    avoid_print: false

@@ -66,5 +66,11 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Galeriden belge fotoğrafı seçmek için fotoğraf arşivine erişim gerekir.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>İşlenmiş belgeyi Fotoğraflar uygulamasına kaydetmek için izin gerekir.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Belgeyi kamerayla çekmek için kamera erişimi gerekir.</string>
 </dict>
 </plist>

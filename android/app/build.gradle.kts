@@ -24,7 +24,8 @@ android {
         applicationId = "com.example.image_to_pdf"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // opencv_4 requires at least API 21 (see https://pub.dev/packages/opencv_4).
+        minSdk = maxOf(flutter.minSdkVersion, 21)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
@@ -41,4 +42,9 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // uCrop (image_cropper) references OkHttp/Okio for remote URIs; without them R8 fails on release minify.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }
