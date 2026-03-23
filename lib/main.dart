@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math' show max;
 
 import 'package:flutter/foundation.dart';
@@ -12,6 +13,99 @@ import 'package:opencv_4/factory/pathfrom.dart';
 import 'package:opencv_4/opencv_4.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+
+const int _kMaxProcessSide = 2048;
+const double _kPostSaturation = 3.0;
+const double _kPostContrast = 1.20;
+
+typedef _ScanPrepared = ({String path, Uint8List bytes, String? tempDirPath});
+
+/// Okuma / decode / gerekirse yeniden boyutlandırma — ana thread’i kilitlemesin diye isolate’ta.
+Future<_ScanPrepared> _prepareScanWork(String normalizedPath) async {
+  final Uint8List fileBytes = await File(normalizedPath).readAsBytes();
+  final img.Image? decoded = img.decodeImage(fileBytes);
+  if (decoded == null) {
+    throw StateError('Görüntü okunamadı.');
+  }
+  final int w = decoded.width;
+  final int h = decoded.height;
+  final int maxSide = w > h ? w : h;
+  if (maxSide <= _kMaxProcessSide) {
+    return (path: normalizedPath, bytes: fileBytes, tempDirPath: null);
+  }
+  final double scale = _kMaxProcessSide / maxSide;
+  final int nw = max(1, (w * scale).round());
+  final int nh = max(1, (h * scale).round());
+  final img.Image resized = img.copyResize(
+    decoded,
+    width: nw,
+    height: nh,
+    interpolation: img.Interpolation.linear,
+  );
+  final Uint8List jpegBytes = Uint8List.fromList(img.encodeJpg(resized, quality: 92));
+  final Directory tempDir = await Directory.systemTemp.createTemp('doc_scan_prep_');
+  final String outPath = '${tempDir.path}${Platform.pathSeparator}in.jpg';
+  await File(outPath).writeAsBytes(jpegBytes);
+  return (path: outPath, bytes: jpegBytes, tempDirPath: tempDir.path);
+}
+
+/// Piksel döngüsü + JPEG encode — en ağır kısım; isolate’ta çalışır.
+Uint8List _magicColorDivideIsolate(Uint8List originalFileBytes, Uint8List blurredJpegBytes) {
+  final img.Image? orig = img.decodeImage(originalFileBytes);
+  final img.Image? blr = img.decodeImage(blurredJpegBytes);
+  if (orig == null || blr == null) return originalFileBytes;
+
+  img.Image blur = blr;
+  if (blur.width != orig.width || blur.height != orig.height) {
+    blur = img.copyResize(blur, width: orig.width, height: orig.height);
+  }
+
+  final img.Image out = img.Image.from(orig);
+  final bool hasAlpha = orig.numChannels >= 4;
+  const double eps = 1.0;
+  const double scale = 255.0;
+
+  for (var y = 0; y < orig.height; y++) {
+    for (var x = 0; x < orig.width; x++) {
+      final o = orig.getPixel(x, y);
+      final b = blur.getPixel(x, y);
+      final double br = max(b.r.toDouble(), eps);
+      final double bg = max(b.g.toDouble(), eps);
+      final double bb = max(b.b.toDouble(), eps);
+      final int rr = (o.r * scale / br).clamp(0.0, 255.0).round();
+      final int gg = (o.g * scale / bg).clamp(0.0, 255.0).round();
+      final int bl = (o.b * scale / bb).clamp(0.0, 255.0).round();
+      final dst = out.getPixel(x, y);
+      if (hasAlpha) {
+        dst.set(img.ColorRgba8(rr, gg, bl, o.a.toInt().clamp(0, 255)));
+      } else {
+        dst.set(img.ColorRgb8(rr, gg, bl));
+      }
+    }
+  }
+
+  img.adjustColor(
+    out,
+    saturation: _kPostSaturation.clamp(1.0, 1.5),
+    contrast: _kPostContrast.clamp(1.0, 2.0),
+  );
+
+  return Uint8List.fromList(img.encodeJpg(out, quality: 92));
+}
+
+Future<_ScanPrepared> _prepareScanOffMain(String normalizedPath) {
+  if (kIsWeb) {
+    return _prepareScanWork(normalizedPath);
+  }
+  return Isolate.run(() => _prepareScanWork(normalizedPath));
+}
+
+Future<Uint8List> _magicColorOffMain(Uint8List original, Uint8List blurred) {
+  if (kIsWeb) {
+    return SynchronousFuture(_magicColorDivideIsolate(original, blurred));
+  }
+  return Isolate.run(() => _magicColorDivideIsolate(original, blurred));
+}
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -57,95 +151,12 @@ class _DocScannerHomePageState extends State<DocScannerHomePage> {
   /// On narrow layouts we toggle which single image is shown.
   bool _showProcessedOnNarrow = false;
 
-  /// `image.adjustColor` sonrası: doygunluk >1.5 HSV’de taşma riski; kontrast en fazla 2.0 (kütüphane).
-  static const double _postSaturation = 3.0;
-  static const double _postContrast = 1.20;
-
-  /// OpenCV + piksel döngüsü bellek kullanır; uzun kenar bu değeri aşarsa önce küçültülür (OOM çökme önlemi).
-  static const int _maxProcessSide = 2048;
-
-  /// Yerel aydınlatma düzeltmesi: `orijinal / bulanık` (OpenCV `divide` ile aynı mantık: `src*scale/blur`).
-  /// Geniş Gaussian (71×71) kağıt lekesini/gri tonu yumuşatır; bölme kontrastı artırır, renk kanalları korunur.
-  Uint8List _magicColorDivide(Uint8List originalFileBytes, Uint8List blurredJpegBytes) {
-    final img.Image? orig = img.decodeImage(originalFileBytes);
-    final img.Image? blr = img.decodeImage(blurredJpegBytes);
-    if (orig == null || blr == null) return originalFileBytes;
-
-    img.Image blur = blr;
-    if (blur.width != orig.width || blur.height != orig.height) {
-      blur = img.copyResize(blur, width: orig.width, height: orig.height);
-    }
-
-    final img.Image out = img.Image.from(orig);
-    final bool hasAlpha = orig.numChannels >= 4;
-    const double eps = 1.0;
-    const double scale = 255.0;
-
-    for (var y = 0; y < orig.height; y++) {
-      for (var x = 0; x < orig.width; x++) {
-        final o = orig.getPixel(x, y);
-        final b = blur.getPixel(x, y);
-        final double br = max(b.r.toDouble(), eps);
-        final double bg = max(b.g.toDouble(), eps);
-        final double bb = max(b.b.toDouble(), eps);
-        final int rr = (o.r * scale / br).clamp(0.0, 255.0).round();
-        final int gg = (o.g * scale / bg).clamp(0.0, 255.0).round();
-        final int bl = (o.b * scale / bb).clamp(0.0, 255.0).round();
-        final dst = out.getPixel(x, y);
-        if (hasAlpha) {
-          dst.set(img.ColorRgba8(rr, gg, bl, o.a.toInt().clamp(0, 255)));
-        } else {
-          dst.set(img.ColorRgb8(rr, gg, bl));
-        }
-      }
-    }
-
-    // Doygunluk + kontrast (HSV doygunluğu 1.0–1.5 aralığında güvenli).
-    img.adjustColor(
-      out,
-      saturation: _postSaturation.clamp(1.0, 1.5),
-      contrast: _postContrast.clamp(1.0, 2.0),
-    );
-
-    return Uint8List.fromList(img.encodeJpg(out, quality: 92));
-  }
-
-  /// Çok büyük fotoğrafları işlemeden önce küçültür; aksi halde native OpenCV OOM ile süreci öldürebilir.
-  Future<({String path, Uint8List bytes, Directory? tempDir})> _prepareProcessingImage(
-    String normalizedPath,
-  ) async {
-    final Uint8List fileBytes = await File(normalizedPath).readAsBytes();
-    final img.Image? decoded = img.decodeImage(fileBytes);
-    if (decoded == null) {
-      throw StateError('Görüntü okunamadı.');
-    }
-    final int w = decoded.width;
-    final int h = decoded.height;
-    final int maxSide = w > h ? w : h;
-    if (maxSide <= _maxProcessSide) {
-      return (path: normalizedPath, bytes: fileBytes, tempDir: null);
-    }
-    final double scale = _maxProcessSide / maxSide;
-    final int nw = max(1, (w * scale).round());
-    final int nh = max(1, (h * scale).round());
-    final img.Image resized = img.copyResize(
-      decoded,
-      width: nw,
-      height: nh,
-      interpolation: img.Interpolation.linear,
-    );
-    final Uint8List jpegBytes = Uint8List.fromList(img.encodeJpg(resized, quality: 92));
-    final Directory tempDir = await Directory.systemTemp.createTemp('doc_scan_prep_');
-    final String outPath = '${tempDir.path}${Platform.pathSeparator}in.jpg';
-    await File(outPath).writeAsBytes(jpegBytes);
-    return (path: outPath, bytes: jpegBytes, tempDir: tempDir);
-  }
-
-  /// Magic Color: renkli görüntü → çok güçlü Gaussian blur (71×71) → orijinal / bulanık.
+  /// Magic Color: hazırlık + OpenCV blur (ana isolate) + bölme/adjust (arka isolate).
   Future<Uint8List> _runScannerPipeline(String imagePath) async {
     final String normalizedPath = imagePath.replaceFirst('file://', '');
-    final ({String path, Uint8List bytes, Directory? tempDir}) prep =
-        await _prepareProcessingImage(normalizedPath);
+    final _ScanPrepared prep = await _prepareScanOffMain(normalizedPath);
+    final Directory? tempDir =
+        prep.tempDirPath != null ? Directory(prep.tempDirPath!) : null;
     try {
       final Uint8List? blurredBytes = await Cv2.gaussianBlur(
         pathFrom: CVPathFrom.GALLERY_CAMERA,
@@ -156,10 +167,10 @@ class _DocScannerHomePageState extends State<DocScannerHomePage> {
       if (blurredBytes == null || blurredBytes.isEmpty) {
         throw StateError('Gaussian blur returned no data.');
       }
-      return _magicColorDivide(prep.bytes, blurredBytes);
+      return _magicColorOffMain(prep.bytes, blurredBytes);
     } finally {
       try {
-        await prep.tempDir?.delete(recursive: true);
+        await tempDir?.delete(recursive: true);
       } catch (_) {}
     }
   }
@@ -335,6 +346,7 @@ class _DocScannerHomePageState extends State<DocScannerHomePage> {
         '${dir.path}${Platform.pathSeparator}belge_islenmis_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
       await file.writeAsBytes(bytes);
+      // Sadece dosya: `text` verilirse WhatsApp’ta görselin altında yazı olarak çıkar.
       await SharePlus.instance.share(
         ShareParams(
           files: <XFile>[
@@ -345,7 +357,6 @@ class _DocScannerHomePageState extends State<DocScannerHomePage> {
             ),
           ],
           title: 'Belgeyi paylaş',
-          text: 'İşlenmiş belge',
         ),
       );
     } catch (e) {
