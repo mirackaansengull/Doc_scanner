@@ -111,7 +111,8 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _testFromCamera() async {
-    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.camera);
+    final XFile? pickedFile =
+        await _picker.pickImage(source: ImageSource.camera);
     if (pickedFile == null) return;
     if (!mounted) return;
     setState(() => _visible = true);
@@ -125,7 +126,8 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _testFromGallery() async {
-    final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery);
+    final XFile? pickedFile =
+        await _picker.pickImage(source: ImageSource.gallery);
     if (pickedFile == null) return;
     if (!mounted) return;
     setState(() => _visible = true);

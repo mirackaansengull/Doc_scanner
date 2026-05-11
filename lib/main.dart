@@ -42,15 +42,22 @@ Future<_ScanPrepared> _prepareScanWork(String normalizedPath) async {
     height: nh,
     interpolation: img.Interpolation.linear,
   );
-  final Uint8List jpegBytes = Uint8List.fromList(img.encodeJpg(resized, quality: 92));
-  final Directory tempDir = await Directory.systemTemp.createTemp('doc_scan_prep_');
+  final Uint8List jpegBytes = Uint8List.fromList(
+    img.encodeJpg(resized, quality: 92),
+  );
+  final Directory tempDir = await Directory.systemTemp.createTemp(
+    'doc_scan_prep_',
+  );
   final String outPath = '${tempDir.path}${Platform.pathSeparator}in.jpg';
   await File(outPath).writeAsBytes(jpegBytes);
   return (path: outPath, bytes: jpegBytes, tempDirPath: tempDir.path);
 }
 
 /// Piksel döngüsü + JPEG encode — en ağır kısım; isolate’ta çalışır.
-Uint8List _magicColorDivideIsolate(Uint8List originalFileBytes, Uint8List blurredJpegBytes) {
+Uint8List _magicColorDivideIsolate(
+  Uint8List originalFileBytes,
+  Uint8List blurredJpegBytes,
+) {
   final img.Image? orig = img.decodeImage(originalFileBytes);
   final img.Image? blr = img.decodeImage(blurredJpegBytes);
   if (orig == null || blr == null) return originalFileBytes;
@@ -155,8 +162,9 @@ class _DocScannerHomePageState extends State<DocScannerHomePage> {
   Future<Uint8List> _runScannerPipeline(String imagePath) async {
     final String normalizedPath = imagePath.replaceFirst('file://', '');
     final _ScanPrepared prep = await _prepareScanOffMain(normalizedPath);
-    final Directory? tempDir =
-        prep.tempDirPath != null ? Directory(prep.tempDirPath!) : null;
+    final Directory? tempDir = prep.tempDirPath != null
+        ? Directory(prep.tempDirPath!)
+        : null;
     try {
       final Uint8List? blurredBytes = await Cv2.gaussianBlur(
         pathFrom: CVPathFrom.GALLERY_CAMERA,
@@ -325,15 +333,15 @@ class _DocScannerHomePageState extends State<DocScannerHomePage> {
   }
 
   void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   void _showInfo(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   /// Sistem paylaşım sayfası (WhatsApp, E-posta vb.).
@@ -548,7 +556,8 @@ class _DocScannerHomePageState extends State<DocScannerHomePage> {
     if (path == null) {
       return const _EmptyHint(
         icon: Icons.add_photo_alternate_outlined,
-        message: '“Resim ekle” ile galeriden seçin veya kamerayla çekin. Ardından kırpma ekranı açılır.',
+        message:
+            '“Resim ekle” ile galeriden seçin veya kamerayla çekin. Ardından kırpma ekranı açılır.',
       );
     }
     return Image.file(
@@ -570,19 +579,12 @@ class _DocScannerHomePageState extends State<DocScannerHomePage> {
         message: '“İşle” ile tarayıcı efektini uygulayın.',
       );
     }
-    return Image.memory(
-      bytes,
-      fit: BoxFit.contain,
-      gaplessPlayback: true,
-    );
+    return Image.memory(bytes, fit: BoxFit.contain, gaplessPlayback: true);
   }
 }
 
 class _ImagePanel extends StatelessWidget {
-  const _ImagePanel({
-    required this.label,
-    required this.child,
-  });
+  const _ImagePanel({required this.label, required this.child});
 
   final String label;
   final Widget child;
@@ -617,10 +619,7 @@ class _ImagePanel extends StatelessWidget {
 }
 
 class _EmptyHint extends StatelessWidget {
-  const _EmptyHint({
-    required this.icon,
-    required this.message,
-  });
+  const _EmptyHint({required this.icon, required this.message});
 
   final IconData icon;
   final String message;
@@ -639,8 +638,8 @@ class _EmptyHint extends StatelessWidget {
               message,
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ],
         ),
